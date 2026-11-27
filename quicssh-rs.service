@@ -4,7 +4,11 @@ After=network.target
 
 [Service]
 DynamicUser=yes
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# DynamicUser=yes implies ProtectSystem=strict (read-only filesystem);
+# prefer systemd journald (default stderr), or add LogsDirectory=quicssh-rs if using --log.
+# Default port (4433) is unprivileged; only set both CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# and AmbientCapabilities=CAP_NET_BIND_SERVICE if binding a privileged port (< 1024).
+CapabilityBoundingSet=
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 NoNewPrivileges=yes
@@ -23,8 +27,21 @@ RestrictRealtime=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@resources @privileged
+# Sized for the default --max-connections 256 with bounded QUIC windows;
+# scale accordingly if raising --max-connections.
+MemoryMax=512M
+TasksMax=512
+LimitNOFILE=4096
 
 Restart=always
+# Production deployments should specify --cert and --key so restarts do not
+# rotate ephemeral self-signed certificates. Keep TLS private keys 0600 root:root
+# and pass them safely into DynamicUser=yes via systemd credentials instead of
+# relaxing file permissions to 0644:
+# LoadCredential=server-cert:/etc/quicssh/server.pem
+# LoadCredential=server-key:/etc/quicssh/server-key.pem
+# LoadCredential=client-ca:/etc/quicssh/client-ca.pem
+# ExecStart=/usr/bin/quicssh-rs server --cert %d/server-cert --key %d/server-key --client-ca %d/client-ca
 ExecStart=/usr/bin/quicssh-rs server
 
 [Install]
