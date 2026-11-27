@@ -9,16 +9,18 @@ description = "A simple ssh server based on quic protocol"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+aws-lc-rs = "1.19.0"
 clap = { version = "4.6.1", features = ["derive"] }
-quinn = "0.11.9"
+quinn = { version = "0.11.9", default-features = false, features = ["log", "platform-verifier", "runtime-tokio", "rustls-aws-lc-rs", "bloom"] }
 tokio = { version = "1.52.3", features = ["full"] }
 url = "2.5.8"
-rustls = "0.23.40"
-rustls-pemfile = "2.2.0"
-rcgen = "0.14.8"
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "logging", "prefer-post-quantum", "std"] }
+rustls-platform-verifier = "0.7.1"
+rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
+subtle = "2.6.1"
 log = { version = "0.4.29", features = ["std", "serde"] }
-log4rs = "1.4.0"
-serde = "1.0.228"
+log4rs = { version = "1.4.0", default-features = false, features = ["console_appender", "file_appender", "pattern_encoder"] }
+serde = { version = "1.0.228", features = ["derive"] }
 toml = "1.1.2"
 
 [package.metadata.deb]

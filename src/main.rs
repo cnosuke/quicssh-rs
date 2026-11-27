@@ -8,7 +8,7 @@ use log4rs::encode::pattern::PatternEncoder;
 
 use clap::{Parser, Subcommand};
 use log::{LevelFilter, error};
-use std::{path::PathBuf, str};
+use std::{path::PathBuf, process::ExitCode};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -16,10 +16,10 @@ use std::{path::PathBuf, str};
 struct Cli {
     #[command(subcommand)]
     command: Commands,
-    /// Location of log, Default if
+    /// Location of log file (defaults to stderr)
     #[clap(value_parser, long = "log")]
     log_file: Option<PathBuf>,
-    /// Log level, Default Error
+    /// Log level, Default Warn
     #[clap(long)]
     log_level: Option<LevelFilter>,
 }
@@ -32,24 +32,27 @@ enum Commands {
     Client(client::Opt),
 }
 
-fn main() {
+fn main() -> ExitCode {
     let args = Cli::parse();
 
-    let level = match args.log_level {
-        Some(log_level) => log_level,
-        None => LevelFilter::Error,
-    };
+    let level = args.log_level.unwrap_or(LevelFilter::Warn);
     let config = match args.log_file {
         Some(log_file) => {
-            let logfile = FileAppender::builder()
+            let logfile = match FileAppender::builder()
                 .encoder(Box::<PatternEncoder>::default())
-                .build(log_file)
-                .unwrap();
+                .build(&log_file)
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("failed to open log file {}: {}", log_file.display(), e);
+                    return ExitCode::FAILURE;
+                }
+            };
 
             Config::builder()
                 .appender(Appender::builder().build("logfile", Box::new(logfile)))
                 .build(Root::builder().appender("logfile").build(level))
-                .unwrap()
+                .expect("valid file logger config")
         }
         None => {
             let stderr = ConsoleAppender::builder()
@@ -59,30 +62,22 @@ fn main() {
             Config::builder()
                 .appender(Appender::builder().build("stderr", Box::new(stderr)))
                 .build(Root::builder().appender("stderr").build(level))
-                .unwrap()
+                .expect("valid stderr logger config")
         }
     };
 
-    log4rs::init_config(config).unwrap();
+    log4rs::init_config(config).expect("initialize logger");
 
-    match args.command {
-        Commands::Server(server) => {
-            let err = server::run(server);
-            match err {
-                Ok(_) => {}
-                Err(e) => {
-                    error!("Error: {:#?}", e);
-                }
-            }
-        }
-        Commands::Client(client) => {
-            let err = client::run(client);
-            match err {
-                Ok(_) => {}
-                Err(e) => {
-                    error!("Error: {:#?}", e);
-                }
-            }
+    let result = match args.command {
+        Commands::Server(server) => server::run(server),
+        Commands::Client(client) => client::run(client),
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            error!("Error: {:#?}", e);
+            ExitCode::FAILURE
         }
     }
 }

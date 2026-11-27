@@ -9,31 +9,52 @@ on:
       - "quicssh-*"
   pull_request:
 
+permissions: {}
+
 env:
   CRATE_NAME: quicssh-rs
-  GITHUB_TOKEN: ${{ github.token }}
   RUST_BACKTRACE: 1
 
 jobs:
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Cache cargo & target directories
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Cargo format
+        run: cargo fmt --all -- --check
+      - name: Cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Cargo test
+        run: cargo test --locked
+
   build:
     name: Compile for ${{ matrix.platform.name }} with Rust ${{ matrix.const.toolchain }}
     runs-on: ${{ matrix.platform.host }}
-    permissions: write-all
+    permissions:
+      contents: read
     strategy:
       # assert perfect success
       fail-fast: true
       matrix:
         const:
           # contain constant information to use them as action style variables
-          # binbase: base file name (means the name without ext)
-          # as_r: true/false whether to act as release (but not release)
-          # is_r: true/false whether is release
-          # is_r: true/false whether is test
+          # binbase: base file name (without extension)
+          # as_r: true/false whether to build release artifacts (v* or test-release*)
           - binbase: quicssh-rs
             toolchain: stable
-            as_r: ${{ startsWith(github.ref,'refs/tags/v') || startsWith(github.ref, 'refs/tags/test-release') }}
-            is_r: ${{ startsWith(github.ref,'refs/tags/v') }}
-            is_t: ${{ startsWith(github.ref, 'refs/tags/test-release') }}
+            as_r: ${{ startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/test-release') }}
         platform:
           # contain target platform information
           # name: the conventional name of the platform
@@ -41,37 +62,32 @@ jobs:
           # target: rust target triple
           # tarball: .tar.gz file name
 
-          # Platforms that don't work:
-          #
-          # - sparc64-unknown-linux-gnu - cannot compile openssl-sys
-          # - x86_64-unknown-illumos - weird error compiling openssl - "bin/sh: 1: granlib: not found"
-
           - name: Windows-x86_64
             host: windows-latest
             target: x86_64-pc-windows-msvc
             tarball: quicssh-Windows-x86_64.tar.gz
           - name: FreeBSD-x86_64
-            host: ubuntu-20.04
+            host: ubuntu-24.04
             target: x86_64-unknown-freebsd
             tarball: quicssh-FreeBSD-x86_64.tar.gz
           - name: Linux-i686
-            host: ubuntu-20.04
+            host: ubuntu-24.04
             target: i686-unknown-linux-musl
             tarball: quicssh-Linux-i686-musl.tar.gz
           - name: Linux-x86_64
-            host: ubuntu-20.04
+            host: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             tarball: quicssh-Linux-x86_64-musl.tar.gz
           - name: Linux-arm
-            host: ubuntu-20.04
+            host: ubuntu-24.04
             target: arm-unknown-linux-musleabi
             tarball: quicssh-Linux-arm-musl.tar.gz
           - name: Linux-armhf
-            host: ubuntu-20.04
+            host: ubuntu-24.04
             target: armv7-unknown-linux-musleabihf
             tarball: quicssh-Linux-armhf-musl.tar.gz
           - name: Linux-aarch64
-            host: ubuntu-20.04
+            host: ubuntu-24.04
             target: aarch64-unknown-linux-musl
             tarball: quicssh-Linux-aarch64-musl.tar.gz
           - name: macOS-x86_64
@@ -84,96 +100,119 @@ jobs:
             tarball: quicssh-Darwin-aarch64.tar.gz
     steps:
       # checkout
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       # build raw
       - name: Cache cargo & target directories
-        uses: Swatinem/rust-cache@v2
-      - name: Install musl-tools # This is needed only for Linux x86_64, since compiles for other arch runs on docker
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Install musl-tools # Needed for native Linux x86_64 musl builds; other Linux arches run in cross
         run: sudo apt-get update --yes && sudo apt-get install --yes musl-tools
         if: contains(matrix.platform.target, 'musl')
       - name: Build binary
-        uses: houseabsolute/actions-rust-cross@v0
+        uses: houseabsolute/actions-rust-cross@21b0f18dc621b25bfae556ff2791fca4173121e8 # v1.0.8
         with:
           command: "build"
           target: ${{ matrix.platform.target }}
           toolchain: ${{ matrix.const.toolchain }}
           args: --locked --release
           strip: true
-      # upload raw
-      - name: Upload raw binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: raw+${{ matrix.platform.target }}
-          path: "target/${{matrix.platform.target}}/release/quicssh-rs*"
-        #if : matrix.const.as_r
+          use-rust-cache: false
 
       # build deb
-      - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@v1.6.4
-        if: matrix.const.as_r && contains(matrix.platform.target, 'linux')
-      - name: BInstall cargo-deb
-        run: cargo binstall --force -y cargo-deb
+      - name: Install cargo-deb
+        run: cargo install --locked cargo-deb --version 3.8.0
         if: matrix.const.as_r && contains(matrix.platform.target, 'linux')
       - name: Build deb package
-        run: cargo deb --no-build --no-strip --target ${{ matrix.platform.target }}
+        env:
+          TARGET: ${{ matrix.platform.target }}
+        run: cargo deb --no-build --no-strip --target "$TARGET"
         if: matrix.const.as_r && contains(matrix.platform.target, 'linux')
       # upload deb
       - name: Upload deb package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deb+${{ matrix.platform.target }}
-          path: "target/${{matrix.platform.target}}/debian/*.deb"
+          path: "target/${{ matrix.platform.target }}/debian/*.deb"
         if: matrix.const.as_r && contains(matrix.platform.target, 'linux')
 
       # build tar
       - name: Build GitHub tarball
         # in future we would need bundle etc files
         shell: bash
+        env:
+          TARGET: ${{ matrix.platform.target }}
+          BINBASE: ${{ matrix.const.binbase }}
+          TARBALL: ${{ matrix.platform.tarball }}
         run: |
-          cd target/${{ matrix.platform.target }}/release
-          if [[ "${{ contains(matrix.platform.target, 'windows') }}" = "true" ]];then
-            binname=${{ matrix.const.binbase }}.exe
+          cd "target/$TARGET/release"
+          if [[ "$TARGET" == *windows* ]]; then
+            binname="${BINBASE}.exe"
           else
-            binname=${{ matrix.const.binbase }}
+            binname="$BINBASE"
           fi
-          if [[ "${{ matrix.platform.host }}" = "windows-latest" ]]; then
-            7z a ../../../${{ matrix.platform.tarball }} $binname
-          else
-            tar czvf ../../../${{ matrix.platform.tarball }} $binname
-          fi
+          tar czvf "../../../$TARBALL" "$binname"
           cd -
         if: matrix.const.as_r
-      - name: Generate SHA-256
-        # This step currently not used, but necessary for brew binary install
-        run: shasum -a 256 ${{ matrix.platform.tarball }}
+      - name: Print tarball SHA-256
+        shell: bash
+        env:
+          TARBALL: ${{ matrix.platform.tarball }}
+        run: |
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$TARBALL"
+          else
+            shasum -a 256 "$TARBALL"
+          fi
         if: matrix.const.as_r
       # upload tar
       - name: Upload GitHub tarball
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: tar+${{matrix.platform.target}}
+          name: tar+${{ matrix.platform.target }}
           path: ${{ matrix.platform.tarball }}
-        if: matrix.const.is_t
-      # publish tar
-      - name: Publish GitHub tarball
-        uses: softprops/action-gh-release@v1
+        if: matrix.const.as_r
+
+  github-release:
+    name: Publish GitHub Release
+    needs: [build, test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release tarballs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: tar+*
+          merge-multiple: true
+          path: release-assets
+      - name: Generate SHA256SUMS
+        working-directory: release-assets
+        run: sha256sum quicssh-*.tar.gz > SHA256SUMS
+      - name: Publish draft GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           draft: true
-          files: "quicssh-*"
-        if: matrix.const.is_r && matrix.const.toolchain == 'stable'
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/quicssh-*.tar.gz
+            release-assets/SHA256SUMS
+
   repository:
     name: Publish repository release
-    permissions: write-all
-    runs-on: ubuntu-latest
-    needs: build
-    if: startsWith(github.ref,'refs/tags/v')||startsWith(github.ref, 'refs/tags/test-release')
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    needs: [build, test]
+    if: vars.ENABLE_SIGNED_APT_REPO == 'true' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/test-release'))
     steps:
       # checkout
       - name: Checkout to pre_publish/publish
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ startsWith(github.ref,'refs/tags/v') && 'publish' || 'pre_publish' }}
+          ref: ${{ startsWith(github.ref, 'refs/tags/v') && 'publish' || 'pre_publish' }}
           fetch-depth: 0
       # move
       - name: Set gitconfig to bot
@@ -181,53 +220,84 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
       - name: Move(reset) pre_publish to pushed commit
-        run: git reset --hard ${{github.ref_name}}
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: git reset --hard -- "refs/tags/$REF_NAME"
+      # verify signing configuration before importing/exporting
+      - name: Verify GPG signing configuration
+        shell: bash
+        env:
+          HAS_GPG_KEY: ${{ secrets.DEB_GPG_SECRET_KEY != '' }}
+        run: |
+          if [[ "$HAS_GPG_KEY" != "true" ]]; then
+            echo "::error::DEB_GPG_SECRET_KEY secret is not configured; refusing to publish an unsigned APT repository."
+            exit 1
+          fi
+          if [[ ! -f publish/deb/conf/distributions ]] || ! grep -Eq '^[[:space:]]*SignWith:[[:space:]]*[^[:space:]]+' publish/deb/conf/distributions; then
+            echo "::error::publish/deb/conf/distributions is missing a non-empty SignWith: entry; refusing to publish an unsigned APT repository."
+            exit 1
+          fi
       # build deb repo
-      - name: Install reprepro and dpkg-sig
-        run: sudo apt-get -y install reprepro dpkg-sig
-      # - name: Import gpg
-      #   uses: crazy-max/ghaction-import-gpg@v6
-      #   with:
-      #     gpg_private_key: ${{ secrets.DEB_GPG_SECRET_KEY }}
+      - name: Install reprepro
+        run: sudo apt-get update --yes && sudo apt-get install --yes reprepro
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6
+        with:
+          gpg_private_key: ${{ secrets.DEB_GPG_SECRET_KEY }}
+          passphrase: ${{ secrets.DEB_GPG_PASSPHRASE }}
       - name: Download deb package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: deb+*
           merge-multiple: true
           path: ./
-      - name: Build deb repository # here we need to provide gpg public (long) id if want to dpkg-sig
-        # now mine is exposed but no problem about valne...ty
+      - name: Build deb repository
+        shell: bash
         run: |
           cd publish/deb
-          for deb in $(ls ../../ |grep -E '\.deb$');do
-            # dpkg-sig -k 3C288CF6F3917DC32ED8605655C5F6BAACEEA951 --sign builder "../../$deb"
-            reprepro includedeb stable "../../$deb"
+          shopt -s nullglob
+          debs=(../../*.deb)
+          if (( ${#debs[@]} == 0 )); then
+            echo "::error::No .deb packages found to include in APT repository."
+            exit 1
+          fi
+          for deb in "${debs[@]}"; do
+            reprepro includedeb stable "$deb"
           done
           reprepro export
+          if ! [[ -s dists/stable/InRelease || -s dists/stable/Release.gpg ]]; then
+            echo "::error::Signed APT metadata (dists/stable/InRelease or dists/stable/Release.gpg) was not generated."
+            exit 1
+          fi
           rm -rf db
           cd -
           git add ./publish/deb/
           git commit -m "ci: generate/update debian repository"
       # publish
       - name: Force push
-        run: git push -f
-  crate:
-    name: Publish crate.io release
-    permissions: write-all
-    runs-on: ubuntu-latest
-    needs: build
-    if: startsWith(github.ref,'refs/tags/v')||startsWith(github.ref, 'refs/tags/test-release')
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-            toolchain: stable
-            override: true
-      - name: Cache cargo & target directories
-        uses: Swatinem/rust-cache@v2
-      - name: Publish crate.io release
-        uses: katyo/publish-crates@v2
-        with:
-          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          dry-run: ${{ startsWith(github.ref, 'refs/tags/test-release') }}
+        env:
+          TARGET_BRANCH: ${{ startsWith(github.ref, 'refs/tags/v') && 'publish' || 'pre_publish' }}
+        run: git push -f origin "HEAD:refs/heads/$TARGET_BRANCH"
 
+  crate:
+    name: Publish crates.io release
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    needs: [build, test]
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/test-release')
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+      - name: Verify crate package
+        run: cargo package --locked
+      - name: Publish to crates.io
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked --no-verify

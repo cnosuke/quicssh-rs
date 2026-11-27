@@ -1,19 +1,28 @@
 name: Code Lint
-on: [push]
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
 
 jobs:
   check:
     name: Rust project
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - name: Install latest nightly
-        uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-            toolchain: stable
-            override: true
-            components: rustfmt, clippy
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Cache cargo & target directories
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Cargo format
         run: cargo fmt --all -- --check
       - name: Cargo clippy
-        run: cargo clippy --all-targets
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Cargo test
+        run: cargo test --locked
